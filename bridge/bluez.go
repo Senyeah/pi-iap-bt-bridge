@@ -21,8 +21,6 @@ const (
 	ifProps      = "org.freedesktop.DBus.Properties"
 	ifObjMgr     = "org.freedesktop.DBus.ObjectManager"
 	ifTransport  = "org.bluez.MediaTransport1"
-	bluealsaName = "org.bluealsa"
-	ifBluealsa   = "org.bluealsa.PCM1"
 	agentPath    = dbus.ObjectPath("/ipod/agent")
 	agentCap     = "NoInputNoOutput" // "Just Works" pairing: the Pi has no screen or keys
 	pairingSecs  = 600
@@ -647,11 +645,6 @@ func (b *bluezPhone) delayTargets(tenths uint16) []dbus.ObjectPath {
 	return out
 }
 
-// bluealsaPCM is the BlueALSA sink PCM of a BlueZ device, for example /org/bluealsa/hci0/dev_X/a2dpsnk/source.
-func bluealsaPCM(device dbus.ObjectPath) dbus.ObjectPath {
-	return dbus.ObjectPath(strings.Replace(string(device), "/org/bluez/", "/org/bluealsa/", 1) + "/a2dpsnk/source")
-}
-
 // ReportDelay tells each phone how long the Pi holds its audio (A2DP delay reporting, AVDTP 1.3). The phone
 // delays its video by that much, as for AirPods. tenths is in 1/10 ms.
 func (b *bluezPhone) ReportDelay(ctx context.Context, tenths uint16) {
@@ -662,21 +655,6 @@ func (b *bluezPhone) ReportDelay(ctx context.Context, tenths uint16) {
 		case <-b.delayKick:
 		}
 		for _, path := range b.delayTargets(tenths) {
-			b.mu.Lock()
-			device := b.transports[path].device
-			b.mu.Unlock()
-			// BlueALSA adds the reported delay to the capture delay that alsaloop sees, and alsaloop would cut
-			// its buffer by that much. The adjustment takes it out again.
-			pcm := b.conn.Object(bluealsaName, bluealsaPCM(device))
-			codec := "SBC"
-			if v, err := pcm.GetProperty(ifBluealsa + ".Codec"); err == nil {
-				if c, ok := v.Value().(string); ok && c != "" {
-					codec = c
-				}
-			}
-			if err := pcm.Call(ifBluealsa+".SetDelayAdjustment", 0, codec, -int16(tenths)).Err; err != nil {
-				b.log.Warn("cannot set the BlueALSA delay adjustment", "pcm", bluealsaPCM(device), "err", err)
-			}
 			if err := b.setProp(path, ifTransport, "Delay", tenths); err != nil {
 				b.log.Info("delay report not sent yet", "transport", path, "err", err) // BlueALSA holds it: next idle
 				continue
@@ -686,7 +664,7 @@ func (b *bluezPhone) ReportDelay(ctx context.Context, tenths uint16) {
 				t.sent = tenths
 			}
 			b.mu.Unlock()
-			b.log.Info("delay reported to the phone", "transport", path, "ms", float64(tenths)/10, "codec", codec)
+			b.log.Info("delay reported to the phone", "transport", path, "ms", float64(tenths)/10)
 		}
 	}
 }

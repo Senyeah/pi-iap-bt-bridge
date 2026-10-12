@@ -58,9 +58,3 @@ func TestDelayTargets(t *testing.T) {
 		t.Errorf("targets %v, want only /t/idle", got)
 	}
 }
-
-func TestBluealsaPCM(t *testing.T) {
-	if got := bluealsaPCM("/org/bluez/hci0/dev_00_11_22_33_44_55"); got != "/org/bluealsa/hci0/dev_00_11_22_33_44_55/a2dpsnk/source" {
-		t.Errorf("got %s", got)
-	}
-}

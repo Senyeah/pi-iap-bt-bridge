@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# Kernel trace of the stereo's USB requests from boot, with the supply voltage, for debugging.
+# Usage: ipod-usbtrace setup|record|off|show [n]. One file per boot in /var/log/ipod-usbtrace.
+set -euo pipefail
+
+T=/sys/kernel/tracing
+DIR=/var/log/ipod-usbtrace
+KEEP=30
+
+setup() {
+  modprobe libcomposite
+  echo 0 > $T/tracing_on
+  echo 0 > $T/events/enable
+  echo > $T/kprobe_events
+  echo > $T/trace
+  echo 8192 > $T/buffer_size_kb
+  # dwc2 handles SET_ADDRESS and GET_STATUS itself: they show only as a state change.
+  cat >> $T/kprobe_events << 'EOF'
+p:usbsetup libcomposite:composite_setup rt=+0(%x1):x8 req=+1(%x1):x8 val=+2(%x1):x16 idx=+4(%x1):x16 len=+6(%x1):u16
+r:usbsetup_ret libcomposite:composite_setup ret=$retval:s32
+p:usbreset usb_gadget_udc_reset
+p:usbdisconnect dwc2_hsotg_disconnect
+p:usbpullup dwc2_hsotg_core_connect
+p:usbstall0 dwc2_hsotg_stall_ep0
+EOF
+  echo 1 > $T/events/kprobes/enable
+  for e in usb_gadget_set_state usb_gadget_connect usb_gadget_disconnect usb_ep_enable usb_ep_disable \
+    usb_ep_set_halt usb_ep_clear_halt; do
+    echo 1 > $T/events/gadget/$e/enable
+  done
+  # ep0 only: the audio endpoint queues 1000 requests a second.
+  for e in usb_ep_queue usb_gadget_giveback_request; do
+    echo 'name ~ "ep0*"' > $T/events/gadget/$e/filter
+    echo 1 > $T/events/gadget/$e/enable
+  done
+  echo 1 > $T/events/printk/console/enable
+  echo 1 > $T/tracing_on
+}
+
+volts() {
+  while :; do
+    v=$(vcgencmd pmic_read_adc EXT5V_V 2> /dev/null | sed 's/.*=//') || true
+    echo "EXT5V ${v:-?} $(vcgencmd get_throttled 2> /dev/null || true)" > $T/trace_marker || true
+    sleep 1
+  done
+}
+
+record() {
+  mkdir -p $DIR
+  n=$(($(cat $DIR/count 2> /dev/null || echo 0) + 1))
+  echo $n > $DIR/count
+  sync $DIR/count
+  # The boot ID keeps two boots apart if a power cut lost the count.
+  f=$(printf '%s/boot-%04d-%.8s.txt' $DIR $n "$(cat /proc/sys/kernel/random/boot_id)")
+  ls -1 $DIR/boot-*.txt 2> /dev/null | head -n -$KEEP | xargs -r rm -f || true
+  {
+    echo "# boot $n, id $(cat /proc/sys/kernel/random/boot_id), clock $(date -Is), uptime $(cut -d' ' -f1 /proc/uptime) s"
+    echo "# times are seconds since boot, as in: journalctl -b -o short-monotonic"
+  } >> "$f"
+  volts &
+  # Power goes off with the car, without a shutdown.
+  (while sleep 2; do sync "$f"; done) &
+  exec cat $T/trace_pipe >> "$f"
+}
+
+off() {
+  echo 0 > $T/tracing_on
+  echo 0 > $T/events/enable
+  echo > $T/kprobe_events
+}
+
+case "${1:-}" in
+  setup) setup ;;
+  record) record ;;
+  off) off ;;
+  show)
+    f=$(ls -1 $DIR/boot-*.txt | tail -n "${2:-1}" | head -n 1)
+    echo "$f"
+    grep -v ' EXT5V ' "$f"
+    ;;
+  *)
+    echo "Usage: ipod-usbtrace setup|record|off|show [n]" >&2
+    exit 2
+    ;;
+esac

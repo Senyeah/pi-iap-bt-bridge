@@ -36,6 +36,7 @@ type config struct {
 	Reconnect   time.Duration // 0: do not connect to the phone by itself
 	PairAfter   time.Duration // 0: no pairing window by itself when no phone connects
 	ReportDelay time.Duration // reported to the phone (A2DP delay reporting), 0: off
+	ReplugAfter time.Duration // frames this long without a configuration: connect to the bus again, 0: off
 }
 
 func envStr(k, def string) string {
@@ -72,10 +73,17 @@ func loadConfig() config {
 			pa = d
 		}
 	}
+	ra := 3 * time.Second
+	if v, ok := os.LookupEnv("IPOD_USB_REPLUG_AFTER"); ok {
+		if d, err := time.ParseDuration(v); err == nil {
+			ra = d
+		}
+	}
 	return config{
 		Reconnect:   re,
 		PairAfter:   pa,
 		ReportDelay: reportDelay(),
+		ReplugAfter: ra,
 		Hidg:        envStr("IPOD_HIDG", "/dev/hidg0"),
 		Gadget:      envStr("IPOD_GADGET", "/sys/kernel/config/usb_gadget/ipod"),
 		Name:        envStr("IPOD_NAME", ""),
@@ -88,10 +96,10 @@ func loadConfig() config {
 	}
 }
 
-// pipelineExtra is the Pi's delay beyond alsaloop's target, measured on the bench (CLAUDE.md, "Delay reporting").
+// pipelineExtra is the Pi's delay beyond the player's buffer, measured on the bench (CLAUDE.md, "Delay reporting").
 const pipelineExtra = 0 * time.Millisecond
 
-// reportDelay is what the Pi adds between the phone and the stereo: alsaloop's target (the same setting as
+// reportDelay is what the Pi adds between the phone and the stereo: the player's buffer (the same setting as
 // ipod-audio), the rest of the pipeline, and IPOD_EXTRA_DELAY_MS for the stereo's own delay (not measured).
 func reportDelay() time.Duration {
 	if !envBool("IPOD_DELAY_REPORT", true) {
@@ -108,9 +116,10 @@ func reportDelay() time.Duration {
 }
 
 type server struct {
-	cfg config
-	ph  *bluezPhone
-	cur atomic.Pointer[pod]
+	cfg   config
+	ph    *bluezPhone
+	cur   atomic.Pointer[pod]
+	stuck *stuckWatch
 }
 
 func main() {
@@ -193,7 +202,7 @@ func run(ctx context.Context, cfg config) error {
 		}()
 	}
 
-	srv := &server{cfg: cfg, ph: ph}
+	srv := &server{cfg: cfg, ph: ph, stuck: newStuckWatch(cfg.ReplugAfter)}
 	if err := srv.listen(ctx); err != nil {
 		slog.Error("control socket", "err", err)
 	}
@@ -241,6 +250,12 @@ func (srv *server) waitConfigured(ctx context.Context) bool {
 	logged := ""
 	for ctx.Err() == nil {
 		st := srv.udcState()
+		udc := readSys(srv.cfg.Gadget + "/UDC")
+		if fn, ok := frameNumber(udc); ok && srv.stuck.sample(time.Now(), st, fn) {
+			slog.Warn("the stereo sends frames but no request: connecting to the bus again", "usb_state", st,
+				"try", srv.stuck.tries)
+			replug(udc)
+		}
 		if st == "configured" {
 			return true
 		}

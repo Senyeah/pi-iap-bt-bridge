@@ -1,6 +1,6 @@
 # pi-iap-bt-bridge: plan
 
-Status (09/10/2026): the Pi 5 plays a phone's Bluetooth audio to the car stereo as an iPod, with track data and controls (Phases 8–11). Delay reporting is in progress (Phase 12). The project started on 08/10/2026 as a USB relay and sniffer (Phases 0–6); section 6 keeps that history. See [CLAUDE.md](CLAUDE.md) for how everything works, and [README.md](README.md) for the short overview.
+Status (09/10/2026): the Pi 5 plays a phone's Bluetooth audio to the car stereo as an iPod, with track data and controls (Phases 8–11). Delay reporting is in progress (Phase 12). On 12/10/2026 the audio cut-outs in the car were traced to `alsaloop`, and `bluealsa-aplay` is back (Phase 13). The project started on 08/10/2026 as a USB relay and sniffer (Phases 0–6); section 6 keeps that history. See [CLAUDE.md](CLAUDE.md) for how everything works, and [README.md](README.md) for the short overview.
 
 ## 1. Goal
 
@@ -29,7 +29,7 @@ flowchart LR
   psu["Bench supply<br/>5.1 V"]
   subgraph pi["Raspberry Pi 5"]
     bluez["BlueZ + BlueALSA<br/>A2DP sink, AVRCP"]
-    loop["alsaloop<br/>fixed delay, -6 dB"]
+    loop["bluealsa-aplay<br/>500 ms buffer, -6 dB"]
     bridge["ipod-bridge<br/>iAP1 iPod side, delay reports"]
     gadget["USB gadget: an iPad<br/>UAC1 audio + HID (hidg0)"]
     bluez --> loop
@@ -50,21 +50,22 @@ flowchart LR
 | USB gadget and iAP1 session | Works in the car and on the bench. |
 | Track data and controls | Work in the car: play, pause (mute), next, back, DISP, RDM, RPT. |
 | No phone | "Waiting" track; works in the car. |
-| Audio | Plays in the car. Some clipping remains at -6 dB (R22). The new `alsaloop` player has not run with a USB host yet. |
+| Audio | Plays in the car. Cut-outs on 11 and 12/10/2026 came from `alsaloop` (R24); back to `bluealsa-aplay` on 12/10/2026. Bluetooth packets get lost in the car (R25). Some clipping remains at -6 dB (R22). |
 | Pairing, reconnecting | Automatic (R20). |
 | Delay reporting | The iPad accepts the report; the value is the 500 ms target until the bench measurement (R23). |
 | Relay, decoder, test stereo | Kept as tools. The relay has one known bug (R17). |
 
 ## 4. Open work
 
-1. **Measure the Pi's delay on the bench.** Connect the Pi 5 to the Pi 3 (taped cable), keep the iPad near, run `./latency-test.sh`. Put the measured rest of the pipeline into `pipelineExtra` (`bridge/main.go`) and deploy. Check `alsaloop` at the same time: sound, a pause of the phone, a phone that goes away.
-2. **Car: check the new audio path and the lip sync.** Play a video on the iPad and compare the picture with the car's sound.
-3. **Clipping:** try `IPOD_AUDIO_GAIN_DB=-9` or `-12` in the car (R22).
-4. **The iPad's device type:** Settings, Bluetooth, Pi iPod, Device Type: Car Stereo. Pair again so that the iPad sees the new Bluetooth class (car audio).
-5. **Skips:** jumps of several tracks with a phone, and "previous" between 2 s and 3 s into a track (R21).
-6. **The stereo's own delay** is not measured (decision: Pi part only). `IPOD_EXTRA_DELAY_MS` can add it later.
-7. **Wi-Fi next to Bluetooth** in the car: not checked.
-8. Relay tools (low priority): see [tools/relay/README.md](tools/relay/README.md), section 8 (golden captures, `car-15`, the iPhone in the car, R17).
+1. **Car: check that the cut-outs are gone** with `bluealsa-aplay` (R24). After a drive, the journal of that boot shows any underrun or lost packet (CLAUDE.md, section 10).
+2. **Bluetooth link in the car (R25):** move the Pi out of its hidden place, or try a USB Bluetooth adapter on a short cable in the cabin. A lower SBC bit pool would also make the stream lighter on the radio.
+3. **Measure the Pi's delay on the bench.** Connect the Pi 5 to the Pi 3 (taped cable), keep the iPad near, run `./latency-test.sh`. Put the measured rest of the pipeline into `pipelineExtra` (`bridge/main.go`) and deploy. Then check the lip sync in the car: play a video on the iPad and compare the picture with the car's sound.
+4. **Clipping:** try `IPOD_AUDIO_GAIN_DB=-9` or `-12` in the car (R22).
+5. **The iPad's device type:** Settings, Bluetooth, Pi iPod, Device Type: Car Stereo. Pair again so that the iPad sees the new Bluetooth class (car audio).
+6. **Skips:** jumps of several tracks with a phone, and "previous" between 2 s and 3 s into a track (R21).
+7. **The stereo's own delay** is not measured (decision: Pi part only). `IPOD_EXTRA_DELAY_MS` can add it later.
+8. **Delay drift** with `bluealsa-aplay` on a long drive (R23): not measured.
+9. Relay tools (low priority): see [tools/relay/README.md](tools/relay/README.md), section 8 (golden captures, `car-15`, the iPhone in the car, R17).
 
 ## 5. Decisions
 
@@ -81,6 +82,7 @@ The user's decisions, in order. Each one changed the design.
 | 09/10/2026 | Skips: a track number of about 500 on the display is acceptable (virtual list of 1000). |
 | 09/10/2026 | Audio level: fixed -6 dB, settable (`IPOD_AUDIO_GAIN_DB`), not the iPad's volume. |
 | 09/10/2026 | Delay: measure the Pi's part only; hold the delay constant with `alsaloop`; keep the 500 ms buffer; report it to the phone (A2DP delay reporting). |
+| 12/10/2026 | Audio player: back to `bluealsa-aplay` for good, and `alsaloop` is dropped (it locked up after one underrun, R24). The delay may drift on long drives. |
 | 09/10/2026 | The iPad's volume slider: leave it as it is. Plain Bluetooth has no documented way to grey it out; a snap-back to full was declined. |
 | 09/10/2026 | Repository: re-purposed to the bridge and renamed `pi-iap-bt-bridge`. The bridge is at the top level; the relay, the decoder and the test stereo are in `tools/`. |
 
@@ -356,11 +358,28 @@ Goal: measure the Pi's audio delay and tell the phone, so that its video waits f
 
 Findings: the iPad offers delay reporting and BlueZ negotiates it, but BlueALSA 4.3.1 never sends a value for a sink, so the iPad had 0. BlueZ lets another program set the value only while BlueALSA does not hold the transport. `bluealsa-aplay` kept a 500 ms buffer full, but BlueALSA's pipe could take up the clock difference, so the delay could grow during a drive (R23).
 
-Done: `ipod-bridge` reports the delay (the iPad accepts it on air), `ipod-audio` uses `alsaloop` to hold the delay at 500 ms, and BlueALSA's `DelayAdjustment` stops a feedback into `alsaloop`. `latency-test.sh` and `latency/analyze.py` measure the Pi's delay from captures on both Pis; a self-test with a known delay passes. The Bluetooth class changed from hands-free to car audio.
+Done: `ipod-bridge` reports the delay (the iPad accepts it on air), `ipod-audio` uses `alsaloop` to hold the delay at 500 ms, and BlueALSA's `DelayAdjustment` stops a feedback into `alsaloop`. `latency-test.sh` and `latency/analyze.py` measure the Pi's delay from captures on both Pis; a self-test with a known delay passes. The Bluetooth class changed from hands-free to car audio. (`alsaloop` was removed again on 12/10/2026: Phase 13.)
 
 Also asked: can the iPad's volume control be disabled, as the output level is fixed? No documented way exists for plain Bluetooth (AVRCP Absolute Volume keeps the slider active); a greyed-out slider is reported with CarPlay, which needs Apple's authentication chip. Left as it is.
 
 To do: the bench measurement and the car check (section 4).
+
+### Phase 13: audio cut-outs in the car (11 and 12/10/2026)
+
+The user reported: on 11/10/2026 the sound stopped during a drive, while next, pause and the track display kept working, with no error on the stereo. On 12/10/2026 the sound was very glitchy until the next track. Both runs used `alsaloop` (Phase 12), which had never run with a USB host.
+
+Findings from the persistent journal (the Pi's clock is wrong in the car, so boots are read on monotonic time):
+
+| Boot | What happened |
+|---|---|
+| −5 | `alsaloop` underran 0.3 s after the stream started, then restarted its capture in a loop (journald dropped messages 7 times). Later: broken Bluetooth frames and 6 lost-packet events. |
+| −4 | The same at stream start, with no Bluetooth error. The loop ran to the end of the boot: up to 1.5 million dropped messages per 30 s. No sound, while iAP kept working. |
+| −1 | Broken Bluetooth frames (`Unexpected start frame`) and 2 × 3 lost packets (`Missing RTP packets`), then an underrun and a 2 s restart loop (about 3,500 cycles). The user skipped the track 5 s later; BlueALSA then wrote to a closed pipe (`Bad file descriptor`). |
+| 0 | At home: no errors. 5 Wi-Fi scans during playback caused no Bluetooth errors. RSSI 8, link quality 170. |
+
+Also: with `alsaloop` the gadget buffer held 1.36 s, not the 500 ms target. Boots −3 and −2 had no phone. The other session's USB replug watchdog (uncommitted on 12/10/2026) worked in each boot.
+
+Fix: `ipod-audio` runs `bluealsa-aplay` again (decision 12/10/2026); its buffer measured 0.42–0.47 s. The bridge no longer sets BlueALSA's `DelayAdjustment`. Open: the lost Bluetooth packets in the car (R25).
 
 ### Paths before the restructure
 
@@ -462,7 +481,10 @@ Mitigation:
 | R20 | The phone deleted its Bluetooth pairing, the Pi kept its key. Every connect failed with `br-connection-key-missing`, and a Pi with a pairing never opened its pairing window: it was hidden, and nothing could pair. | **Occurred** (09/10/2026, car) | The bridge removes a pairing after 3 failed connects with a missing key and opens the window. The window also opens 60 s after start when no phone is connected. `ipod-bridge ctl forget` does it by hand. |
 | R21 | The stereo's next and back are indexes (`SetCurrentPlayingTrack`), wrapped at a track count that it read before the index changed. A virtual list of index + 2 made next wrap to 0 (a "previous") and back wrap to the end (a "next"). | **Occurred** (09/10/2026, car) | 1000 virtual tracks with the index in the middle, steps the short way round, up to 5 steps, and the back button's second command ignored. The third car run worked (Phase 11). **Open:** jumps of several tracks with a phone, and "previous" between 2 s and 3 s into a track. |
 | R22 | The car stereo clips loud songs at the full digital level of the Bluetooth stream (the stream itself does not clip). | **Occurred** (09/10/2026, car) | The audio goes 6 dB lower (`IPOD_AUDIO_GAIN_DB`). Third car run: better, but some clipping remains. **Open:** try more attenuation. |
-| R23 | The phone did not know the Pi's audio delay (about 0.5 s), so video ran ahead of the sound. BlueALSA 4.3.1 does not send A2DP delay reports for a sink. The delay could also grow during a drive: `bluealsa-aplay` let BlueALSA's pipe take up the clock difference. | **Found** (09/10/2026) | `ipod-bridge` reports the delay through BlueZ when the transport is idle (the iPad accepts it), `alsaloop` holds the delay constant. **Open:** the bench measurement of the Pi's delay, `alsaloop` with a real host, and a check that iOS uses the value. |
+| R23 | The phone did not know the Pi's audio delay (about 0.5 s), so video ran ahead of the sound. BlueALSA 4.3.1 does not send A2DP delay reports for a sink. The delay could also grow during a drive: `bluealsa-aplay` let BlueALSA's pipe take up the clock difference. | **Found** (09/10/2026) | `ipod-bridge` reports the delay through BlueZ when the transport is idle (the iPad accepts it). `alsaloop` held the delay constant but locked up (R24), so `bluealsa-aplay` is back (12/10/2026) and the drift stays. **Open:** the bench measurement of the Pi's delay, the drift on a long drive, and a check that iOS uses the value. |
+| R24 | `alsaloop` with the BlueALSA capture plugin: after one underrun (at a stream start, or after lost Bluetooth packets) it restarts its capture thousands of times per second and plays nothing. The iAP side keeps working, so the stereo shows no error. | **Occurred** (11 and 12/10/2026, car) | `bluealsa-aplay` again; `alsaloop` is dropped (decision 12/10/2026). |
+| R25 | Bluetooth audio packets are lost in the car: broken frames at the Pi (`Unexpected start frame`) and gaps in the RTP sequence. The Pi is hidden in the car, the iPad in the cabin. None at home. | **Occurred** (11 and 12/10/2026, car) | With `bluealsa-aplay` a loss gives a short gap, not a lock-up. **Open:** a better place for the Pi, a USB Bluetooth adapter on a cable, or a lower SBC bit pool. |
+| R26 | When the Pi is on the bus before the stereo's USB host starts, the stereo resets the bus once, then sends frames but no request, and never configures the iPod. | **Occurred** (car, found on 10/10/2026) | `ipod-bridge` watches the frame number and reconnects to the bus after 3 s without a request, up to 3 times (`IPOD_USB_REPLUG_AFTER`). `ipod-usbtrace` records the stereo's requests from boot. In each car boot of 11 and 12/10/2026 one reconnect was enough. |
 
 ## 10. Alternative: a passive analyser
 

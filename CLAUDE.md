@@ -1,17 +1,17 @@
 # pi-iap-bt-bridge: notes for an agent
 
-Handover notes for an agent that starts with no context, and the full technical notes for a developer. Last updated 09/10/2026. The short overview for people is [README.md](README.md).
+Handover notes for an agent that starts with no context, and the full technical notes for a developer. Last updated 12/10/2026. The short overview for people is [README.md](README.md).
 
-Read this file first. Then read [PLAN.md](PLAN.md): the goal, the status, the open work, the user's decisions, the full history (phases 0–12) and risks R1–R23 with evidence.
+Read this file first. Then read [PLAN.md](PLAN.md): the goal, the status, the open work, the user's decisions, the full history (phases 0–13) and risks R1–R26 with evidence.
 
 ## 1. What this project is
 
 A Raspberry Pi 5 lets an old car stereo that knows only iPods play a phone over Bluetooth. The phone sends its audio and track data to the Pi over Bluetooth (A2DP and AVRCP). To the stereo, the Pi is an iPod on USB: it synthesizes the whole iAP1 session (identification, the authentication exchange, play status, track data, notifications) and the USB audio from the Bluetooth input. The stereo's buttons control the phone.
 
 ```
-phone ──Bluetooth A2DP──► Pi 5 ──BlueALSA──► alsaloop ──► USB gadget sound card ──► USB-C cable ──► car stereo
-  ▲     AVRCP metadata       │                                                        (VBUS taped)      (USB host)
-  └─────AVRCP controls───────┴── ipod-bridge ◄── iAP1 over HID (/dev/hidg0) ◄────────────────────────────┘
+phone ──Bluetooth A2DP──► Pi 5 ──BlueALSA──► bluealsa-aplay ──► USB gadget sound card ──► USB-C cable ──► car stereo
+  ▲     AVRCP metadata       │                                                              (VBUS taped)      (USB host)
+  └─────AVRCP controls───────┴── ipod-bridge ◄── iAP1 over HID (/dev/hidg0) ◄──────────────────────────────────┘
 ```
 
 The stereo speaks **iAP1** (Apple's legacy iPod Accessory Protocol) over **USB HID** and takes music over **USB Audio Class 1**. No CarPlay, no iAP2. The stereo is a Panasonic CQ-JZ41F0AE (Suzuki PA68L0) in a Suzuki Swift of about 2010.
@@ -19,11 +19,11 @@ The stereo speaks **iAP1** (Apple's legacy iPod Accessory Protocol) over **USB H
 | Part | State on 09/10/2026 |
 |---|---|
 | Stereo session (USB and iAP1) | **Works in the car.** Full-speed link, certificate, init queries, polling. |
-| Audio from the phone | **Plays in the car.** Less clipping after the fixed -6 dB gain, but some remains (third car run). |
+| Audio from the phone | **Plays in the car.** Less clipping after the fixed -6 dB gain, but some remains (third car run). The cut-outs of 11 and 12/10/2026 came from `alsaloop` (R24); `bluealsa-aplay` plays again since 12/10/2026. Bluetooth packets get lost in the car (R25). |
 | No phone connected | A playing "Waiting" track instead of `Unsupported` (third car run: works). |
 | Stereo buttons | Play, pause (also the stereo's mute), next, back, DISP, RDM and RPT work (third car run: "seems to work OK"). |
 | Pairing and reconnecting | The Pi connects to a paired phone by itself, forgets dead pairings, and opens a pairing window when no phone connects. |
-| Delay reporting | The iPad accepts the Pi's delay report (500 ms for now). The Pi's real delay is not measured yet, and `alsaloop` has not run with a USB host yet. |
+| Delay reporting | The iPad accepts the Pi's delay report (500 ms). `bluealsa-aplay`'s buffer measured 0.42–0.47 s on 12/10/2026; the full Pi delay is not measured yet. |
 
 ### How we got here
 
@@ -87,9 +87,9 @@ macOS adds `.DS_Store` files; exclude them when you copy files to a Pi.
 pi-iap-bt-bridge/
 ├── CLAUDE.md               # this file: the full notes
 ├── README.md               # the short overview for people
-├── PLAN.md                 # goal, status, open work, decisions, history (phases 0–12), risks R1–R23
+├── PLAN.md                 # goal, status, open work, decisions, history (phases 0–13), risks R1–R26
 ├── bridge/                 # ipod-bridge (Go): the iPod side of iAP1, the BlueZ phone, pairing, delay reports
-├── files/                  # files installed on the Pi 5: ipod-gadget, ipod-mode, ipod-audio, units, settings, ALSA gain
+├── files/                  # files installed on the Pi 5: ipod-gadget, ipod-mode, ipod-audio, ipod-usbtrace, units, settings, ALSA gain, journald
 ├── uac1-fs/                # DKMS patch: the kernel UAC1 gadget at full speed (R18)
 ├── latency/                # analyze.py and selftest.py: the Pi's delay, Bluetooth in to USB out
 ├── build.sh                # tests and builds ipod-bridge in Docker; output out/ipod-bridge
@@ -145,7 +145,7 @@ The Pi 3 test stereo: [tools/test-stereo/README.md](tools/test-stereo/README.md)
 | USB gadget | An iPad (`05ac:12ab`) with two configurations. The stereo selects configuration 2: USB audio out of the device, and the iAP HID interface (the 96-byte full-speed report descriptor). Built with configfs. | `files/usr/local/sbin/ipod-gadget` |
 | Patched audio function | The kernel's UAC1 function has a full-speed bug. See section 6.4. | `uac1-fs/`, `install-uac1-fs.sh` |
 | `ipod-bridge` | Go program. The iPod side of iAP1 on `/dev/hidg0`. Gets track data from the phone and sends the stereo's controls to it. Also the pairing agent. | `bridge/` |
-| BlueZ + BlueALSA | A2DP sink and AVRCP. `ipod-audio` runs `alsaloop` from the BlueALSA PCM into the gadget sound card, at a fixed delay and gain. | `files/etc/systemd/system/`, `files/usr/local/sbin/ipod-audio` |
+| BlueZ + BlueALSA | A2DP sink and AVRCP. `ipod-audio` runs `bluealsa-aplay` from the BlueALSA PCM into the gadget sound card, with a 500 ms buffer and a fixed gain. | `files/etc/systemd/system/`, `files/usr/local/sbin/ipod-audio` |
 | `ipod-mode` | Switches the Pi 5 between this mode and the USB relay. | `files/usr/local/sbin/ipod-mode` |
 
 `ipod-bridge` reuses `oandrew/ipod` (v0.2.0) for packet checksums and the HID report types. Its replies are checked byte for byte against the real iPad in session `car-10`.
@@ -203,8 +203,8 @@ The phone delays its video by the delay that the audio sink reports: A2DP delay 
 |---|---|
 | Report | `ipod-bridge` sets `org.bluez.MediaTransport1.Delay` (1/10 ms). BlueZ sends `DELAY_REPORT` at once. BlueZ lets other programs set it only while BlueALSA does not hold the transport, so the bridge sets it when the transport is idle, for example right after the phone connects. BlueZ sends the value again for a new stream configuration. |
 | Value | `IPOD_AUDIO_LATENCY_MS` + the measured rest of the pipeline (`pipelineExtra` in `bridge/main.go`) + `IPOD_EXTRA_DELAY_MS`. |
-| Constant delay | `alsaloop` holds the delay between the BlueALSA PCM and the gadget at `IPOD_AUDIO_LATENCY_MS`, and resamples (`-S 4`) the small difference between the phone's clock and the stereo's USB clock. `bluealsa-aplay` kept its buffer full but let BlueALSA's pipe (up to 1.5 s) take up the difference, so its delay could grow during a drive. |
-| No feedback | The BlueALSA ALSA plugin adds BlueALSA's `Delay`, which includes the reported value, to its capture delay. `alsaloop` would then cut its buffer by that much. The bridge sets BlueALSA's `DelayAdjustment` to minus the reported value. |
+| The delay | `bluealsa-aplay` keeps its `IPOD_AUDIO_LATENCY_MS` buffer full: 0.42–0.47 s measured on the gadget (12/10/2026). The small difference between the phone's clock and the stereo's USB clock goes into BlueALSA's pipe (up to 1.5 s), so the delay can grow on a long drive (R23). |
+| Not used | `alsaloop` (09/10–12/10/2026) held the delay constant by resampling, but after one underrun it restarted its capture thousands of times per second, with no sound (R24). Its real delay was also 1.36 s, not 500 ms. The bridge set BlueALSA's `DelayAdjustment` for it; that is gone too. |
 
 Checked on 09/10/2026 with `btmon`: the Pi sends `90 0d 04 13 89` (`DELAY_REPORT`, endpoint 1, 500.1 ms) and the iPad answers `92 0d` (accept).
 
@@ -227,11 +227,11 @@ Checked on 09/10/2026 with `btmon`: the Pi sends `90 0d 04 13 89` (`DELAY_REPORT
 | `IPOD_AUTH_TIMEOUT` | `70s` | When the iPod passes the authentication without a signature. |
 | `IPOD_RECONNECT_EVERY` | `10s` | The Pi connects to the paired phones by itself at this interval. `0` switches it off. |
 | `IPOD_PAIR_AFTER` | `60s` | The pairing window opens by itself when no phone is connected this long after start. `0` switches it off. |
+| `IPOD_USB_REPLUG_AFTER` | `3s` | When the stereo sends USB frames this long but no request, the Pi disconnects from the bus and connects again (up to 3 times). `0` switches it off. |
 | `IPOD_AUDIO_GAIN_DB` | `-6` | The phone's audio goes to the stereo this many dB lower. `0`: unchanged. Restart `ipod-audio` after a change. |
-| `IPOD_AUDIO_LATENCY_MS` | `500` | `alsaloop`'s fixed delay. The reported delay follows it. Restart `ipod-audio` and `ipod-bridge`. |
+| `IPOD_AUDIO_LATENCY_MS` | `500` | `bluealsa-aplay`'s buffer. The reported delay follows it. Restart `ipod-audio` and `ipod-bridge`. |
 | `IPOD_EXTRA_DELAY_MS` | `0` | Added to the reported delay, for the stereo's own delay (not measured). |
 | `IPOD_DELAY_REPORT` | on | `0`: do not report the delay to the phone. |
-| `IPOD_AUDIO_PLAYER` | `alsaloop` | `aplay`: the earlier `bluealsa-aplay`, whose delay can grow during a drive. |
 | `IPOD_DEBUG`, `IPOD_TRACE_HID` | off, on | More log lines. A raw HID report trace. |
 
 ```bash
@@ -241,7 +241,10 @@ ipod-bridge ctl pair [secs]   # open the pairing window
 ipod-bridge ctl forget all|<address>|<name>   # remove a pairing (and open the window if no phone is left)
 ipod-bridge ctl toggle|play|pause|next|prev    # press the phone's buttons (AVRCP)
 journalctl -u ipod-bridge -f
+ipod-usbtrace show [n]        # the stereo's USB requests in the last (or n-th last) boot, from /var/log/ipod-usbtrace
 ```
+
+`ipod-usbtrace` records a kernel trace of the stereo's USB control requests, resets and stalls from boot, with the supply voltage every second, one file per boot (the last 30). `ipod-usbtrace.service` runs it when it is enabled.
 
 Packet traces are in `/var/lib/ipod-bridge/traces/session-*.jsonl` (`A>D` comes from the stereo, `D>A` is sent by the Pi).
 
@@ -347,9 +350,14 @@ The bridge:
 - When nothing plays into the gadget, it sends silence: the kernel clears the buffer when playback stops.
 - The BlueALSA ALSA plugin prints debug lines (`D: bluealsa-pcm.c`) into the `ipod-audio` journal.
 - The Pi 5 kernel has no dynamic debug. To watch the stereo's USB control requests, enable the `gadget` events in `/sys/kernel/tracing` (`usb_ep_queue` on ep0, `usb_ep_enable`, `usb_gadget_set_state`).
+- When the Pi is on the bus before the stereo's USB host starts, the stereo resets the bus once and then sends frames (SOF) but no request. A new connection works. `ipod-bridge` reads the frame number from the dwc2 debug file (`/sys/kernel/debug/usb/<udc>/state`) and reconnects through `soft_connect` (`IPOD_USB_REPLUG_AFTER`). In the car boots of 11 and 12/10/2026 it reconnected once, and the stereo connected about 2 s later.
+- The power goes off with the car, without a shutdown. `/etc/systemd/journald.conf.d/60-ipod-persistent.conf` makes the journal persistent and syncs it every 5 s (Raspberry Pi OS sets it to volatile).
 - `btmon` text output is lost when `timeout` kills it: capture with `btmon -w` and read back with `btmon -r`. A `btmon` that starts after the channels are open cannot name AVDTP signals; look for the raw bytes.
 
 Pi OS:
+
+- The Pi has no clock battery, and no network in the car. Each boot there starts at the last saved time, so journal times from the car are not real times (on 12/10/2026 all six boots started at "11/10/2026 13:53"). Find a car boot with `journalctl --list-boots` and read it with `-o short-monotonic`.
+- The BlueALSA ALSA plugin logs each start and stop. In a restart loop, journald dropped up to 1.5 million `ipod-audio` messages per 30 s (`Suppressed … messages`).
 
 - The Raspberry Pi OS image blocks Wi-Fi until a country is set. `prepare-sdcard.sh` unblocks it and sets NZ.
 - macOS writes `._*` files onto the FAT boot partition. `prepare-sdcard.sh` deletes them.
@@ -369,7 +377,8 @@ Tooling on the Mac:
 ## 11. Not verified
 
 - **Clipping.** Less after the fixed -6 dB, but some remains (third car run). `IPOD_AUDIO_GAIN_DB` can go lower.
-- **`alsaloop` with a real USB host.** Deployed with no host attached. Its sound, its resampling and its behaviour when the phone pauses are not checked yet.
+- **Bluetooth packet loss in the car (R25).** Frames arrive broken and packets go missing there, with the Pi hidden and the iPad in the cabin. At home, at a short distance and with Wi-Fi scans, there were none. `bluealsa-aplay` makes a short gap of it; with `alsaloop` it stopped the sound.
+- **Delay drift.** `bluealsa-aplay`'s delay can grow on a long drive (R23). Not measured.
 - **The Pi's measured delay.** The report is `IPOD_AUDIO_LATENCY_MS` until `latency-test.sh` has run on the bench (section 6.5). The stereo's own delay is not in it.
 - **That iOS uses the report.** The iPad accepts it (AVDTP accept). Whether its video then matches the car's sound is not checked.
 - **The iPad's volume.** It has no effect on the sound (absolute volume with a fixed gain). Plain Bluetooth has no documented way to disable the iPad's slider; a greyed-out slider is reported with CarPlay (iAP2, Apple authentication chip). Left as it is, by decision.

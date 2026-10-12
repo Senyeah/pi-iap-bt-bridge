@@ -1,0 +1,12 @@
+[Unit]
+Description=Kernel trace of the stereo's USB requests from boot (debugging)
+Before=ipod-gadget.service
+
+[Service]
+Type=simple
+ExecStartPre=/usr/local/sbin/ipod-usbtrace setup
+ExecStart=/usr/local/sbin/ipod-usbtrace record
+ExecStopPost=-/usr/local/sbin/ipod-usbtrace off
+
+[Install]
+WantedBy=multi-user.target

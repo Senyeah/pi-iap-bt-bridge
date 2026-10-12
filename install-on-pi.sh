@@ -12,6 +12,13 @@ install -m 755 "$SRC/ipod-bridge" /usr/local/bin/ipod-bridge
 install -m 755 "$SRC/files/usr/local/sbin/ipod-gadget" /usr/local/sbin/ipod-gadget
 install -m 755 "$SRC/files/usr/local/sbin/ipod-mode" /usr/local/sbin/ipod-mode
 install -m 755 "$SRC/files/usr/local/sbin/ipod-audio" /usr/local/sbin/ipod-audio
+install -m 755 "$SRC/files/usr/local/sbin/ipod-usbtrace" /usr/local/sbin/ipod-usbtrace
+install -d /etc/systemd/journald.conf.d
+if ! cmp -s "$SRC/files/etc/systemd/journald.conf.d/60-ipod-persistent.conf" /etc/systemd/journald.conf.d/60-ipod-persistent.conf; then
+  install -m 644 "$SRC/files/etc/systemd/journald.conf.d/60-ipod-persistent.conf" /etc/systemd/journald.conf.d/
+  systemctl restart systemd-journald.service
+  journalctl --flush
+fi
 install -d /etc/alsa/conf.d
 install -m 644 "$SRC/files/etc/alsa/conf.d/60-ipod-gain.conf" /etc/alsa/conf.d/60-ipod-gain.conf
 install -m 644 "$SRC"/files/etc/systemd/system/ipod-*.service /etc/systemd/system/
@@ -19,7 +26,7 @@ install -d /etc/systemd/system/bluealsa.service.d
 install -m 644 "$SRC/files/etc/systemd/system/bluealsa.service.d/ipod.conf" /etc/systemd/system/bluealsa.service.d/ipod.conf
 # Keep local edits of the settings file. Settings that came later are added with their comments.
 if [ -e /etc/ipod-bridge.conf ]; then
-  for v in IPOD_PAIR_AFTER IPOD_AUDIO_GAIN_DB IPOD_AUDIO_LATENCY_MS IPOD_EXTRA_DELAY_MS; do
+  for v in IPOD_PAIR_AFTER IPOD_USB_REPLUG_AFTER IPOD_AUDIO_GAIN_DB IPOD_AUDIO_LATENCY_MS IPOD_EXTRA_DELAY_MS; do
     grep -q "^#* *$v=" /etc/ipod-bridge.conf ||
       awk -v v="$v" '/^#/ { c = c $0 "\n"; next } $0 ~ "^" v "=" { printf "\n%s%s\n", c, $0 } { c = "" }' \
         "$SRC/files/etc/ipod-bridge.conf" >> /etc/ipod-bridge.conf
